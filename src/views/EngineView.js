@@ -74,9 +74,10 @@ export class EngineView {
       : '';
   }
 
-  #renderStatus({ status, backend }) {
+  #renderStatus({ status, backend, visionOnCpu }) {
     const [label, tone] = STATUS[status] ?? [status, null];
-    const backendName = backend === 'webgpu' ? 'WebGPU' : 'CPU';
+    let backendName = 'CPU';
+    if (backend === 'webgpu') backendName = visionOnCpu ? 'WebGPU + CPU vision' : 'WebGPU';
     this.status.textContent = status === 'ready' && backend ? `Ready · ${backendName}` : label;
     if (tone) this.status.dataset.tone = tone;
     else delete this.status.dataset.tone;
