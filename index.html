@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="Private, browser-only OCR powered by Chandra OCR 2. Nothing leaves your device." />
+    <title>Browser OCR</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Cpath d='M9 10h14M9 16h14M9 22h9' stroke='white' stroke-width='2.5' stroke-linecap='round'/%3E%3C/svg%3E" />
+    <!-- Injects COOP/COEP on static hosts that can't send headers (enables multi-threaded WASM). -->
+    <script src="./coi-serviceworker.js"></script>
+    <script>
+      // Apply saved theme before first paint to avoid a flash.
+      try {
+        const t = localStorage.getItem('online-ocr:theme');
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      } catch {}
+    </script>
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <h1>Browser OCR</h1>
+          <p class="muted">Chandra OCR 2 · runs entirely on your device</p>
+        </div>
+      </div>
+      <button id="theme-toggle" class="btn btn-ghost" type="button" aria-label="Toggle theme"></button>
+    </header>
+
+    <main class="layout">
+      <aside class="sidebar">
+        <section class="card" id="engine-panel" aria-labelledby="engine-title">
+          <div class="card-head">
+            <h2 id="engine-title">Model</h2>
+            <span class="pill" id="engine-status">Checking…</span>
+          </div>
+          <label class="field">
+            <span class="small muted">Model variant</span>
+            <select id="engine-variant" disabled></select>
+          </label>
+          <p class="muted small" id="engine-desc"></p>
+          <ul class="chips" id="engine-caps" aria-label="Device capabilities"></ul>
+          <ul class="warnings" id="engine-warnings"></ul>
+
+          <div class="progress" id="engine-progress" hidden>
+            <div class="progress-bar"><div class="progress-fill" id="engine-progress-fill"></div></div>
+            <p class="small muted" id="engine-progress-text"></p>
+          </div>
+
+          <div class="actions">
+            <button class="btn btn-primary" id="engine-primary" type="button" disabled>Checking…</button>
+            <button class="btn" id="engine-cancel" type="button" hidden>Cancel</button>
+            <button class="btn btn-danger-ghost" id="engine-delete" type="button" hidden>Delete model</button>
+          </div>
+
+          <details class="log">
+            <summary class="small">Runtime log</summary>
+            <pre id="engine-log" aria-live="off"></pre>
+          </details>
+        </section>
+
+        <section class="card" id="upload-panel" aria-labelledby="upload-title">
+          <div class="card-head"><h2 id="upload-title">Document</h2></div>
+          <label class="dropzone" id="dropzone" tabindex="0">
+            <input type="file" id="file-input" multiple accept=".pdf,.docx,image/*,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+            <span class="dropzone-icon" aria-hidden="true">⇪</span>
+            <strong>Drop files or click to browse</strong>
+            <span class="small muted">PDF, DOCX, PNG, JPG, WEBP — or paste an image with <kbd>Ctrl</kbd>+<kbd>V</kbd></span>
+          </label>
+          <p class="small muted" id="upload-status" role="status"></p>
+          <div class="actions">
+            <button class="btn btn-primary" id="run-btn" type="button" disabled>Run OCR</button>
+            <button class="btn" id="stop-btn" type="button" hidden>Stop</button>
+            <button class="btn btn-ghost" id="clear-btn" type="button" disabled>Clear</button>
+          </div>
+          <p class="small muted" id="run-hint"></p>
+        </section>
+      </aside>
+
+      <section class="results" aria-labelledby="results-title">
+        <div class="results-head">
+          <h2 id="results-title">Results</h2>
+          <div class="actions" id="export-actions">
+            <button class="btn btn-ghost" type="button" data-export="copy-md" disabled>Copy Markdown</button>
+            <button class="btn btn-ghost" type="button" data-export="md" disabled>Download .md</button>
+            <button class="btn btn-ghost" type="button" data-export="html" disabled>Download .html</button>
+          </div>
+        </div>
+        <div id="pages" class="pages">
+          <div class="empty" id="pages-empty">
+            <p><strong>No pages yet.</strong></p>
+            <p class="muted small">Download the model once, then add a document. Files never leave this browser.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
