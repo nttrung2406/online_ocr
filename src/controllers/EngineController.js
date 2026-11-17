@@ -10,6 +10,27 @@ function runtimeOverrides() {
   return Object.fromEntries(keys.filter((k) => q.has(k)).map((k) => [k, Number(q.get(k))]));
 }
 
+const VISION_CPU_KEY = 'online-ocr:vision-on-cpu';
+
+/** Image encoder placement: `?vision=cpu|gpu` wins, else what this device needed last time. */
+function visionOnCpuPreference() {
+  const q = new URLSearchParams(location.search).get('vision');
+  if (q) return q === 'cpu';
+  try {
+    return localStorage.getItem(VISION_CPU_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function rememberVisionOnCpu() {
+  try {
+    localStorage.setItem(VISION_CPU_KEY, '1');
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Owns the model lifecycle: capability check → pick variant → download → load → ready. */
 export class EngineController {
   #abort = null;
@@ -104,14 +125,37 @@ export class EngineController {
       // `?backend=webgpu|cpu` overrides auto-detection (troubleshooting / testing).
       const forced = new URLSearchParams(location.search).get('backend');
       const preferGpu = forced ? forced === 'webgpu' : !!this.model.state.capabilities?.webgpu;
-      const { backend, threads } = await this.engine.load(this.#variant, { preferGpu, overrides: runtimeOverrides() });
-      this.model.update({ status: 'ready', backend, threads });
+      const { backend, threads, visionOnCpu } = await this.engine.load(this.#variant, {
+        preferGpu,
+        overrides: runtimeOverrides(),
+        visionOnCpu: visionOnCpuPreference(),
+      });
+      this.model.update({ status: 'ready', backend, threads, visionOnCpu });
       const where = backend === 'webgpu' ? 'WebGPU' : `CPU (${threads} threads)`;
       toast(`Model ready on ${where}`);
     } catch (err) {
       const hint = err.code === 'cpu_heap_limit' ? '' : ' This usually means the device ran out of memory — close other tabs and retry.';
       this.model.update({ status: 'error', error: `Could not load the model: ${err.message}${hint}` });
     }
+  }
+
+  /**
+   * Reload after the engine crashed mid-OCR. If WebGPU timed out while encoding the image,
+   * move the image encoder to CPU first (remembered for this device).
+   * @returns {Promise<boolean>} true when the engine is ready again
+   */
+  async recover(crash) {
+    const { backend, visionOnCpu } = this.model.state;
+    if (crash?.gpuTimeout && backend === 'webgpu' && !visionOnCpu) {
+      rememberVisionOnCpu();
+      toast('The GPU timed out encoding the image — moving that step to the CPU and retrying.', 5000);
+      this.view.appendLog('warn', 'WebGPU image-encoding timeout: reloading with the vision encoder on CPU.');
+    } else {
+      toast('The OCR engine crashed — reloading and retrying.', 4000);
+    }
+    this.model.update({ status: 'cached', backend: null });
+    await this.load();
+    return this.model.isReady;
   }
 
   async deleteModel() {

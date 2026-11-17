@@ -14,6 +14,7 @@ export class EngineModel extends EventEmitter {
     cached: {}, // variantId → bytes cached (0 = not downloaded)
     progress: { loaded: 0, total: 0, bytesPerSec: 0 },
     backend: null, // 'webgpu' | 'cpu'
+    visionOnCpu: false, // image encoder (mmproj) running on CPU while the LLM uses WebGPU
     threads: 1,
     error: null,
     capabilities: null,

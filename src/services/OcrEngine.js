@@ -24,8 +24,15 @@ export class OcrEngine {
     });
   }
 
+  #recentLog = [];
+
   #logger() {
-    const fwd = (level) => (...args) => this.#onLog(level, args.map(String).join(' '));
+    const fwd = (level) => (...args) => {
+      const text = args.map(String).join(' ');
+      this.#recentLog.push(text);
+      if (this.#recentLog.length > 50) this.#recentLog.shift();
+      this.#onLog(level, text);
+    };
     return { debug: () => {}, log: fwd('log'), warn: fwd('warn'), error: fwd('error') };
   }
 
@@ -59,7 +66,13 @@ export class OcrEngine {
    * Load a cached variant into the runtime.
    * @returns {Promise<{backend: 'webgpu'|'cpu', threads: number}>}
    */
-  async load(variant, { preferGpu = true, overrides = {} } = {}) {
+  /**
+   * @param {object} opts
+   * @param {boolean} [opts.visionOnCpu] keep the image encoder (mmproj) on CPU while the LLM uses
+   *   WebGPU. llama.cpp's WebGPU backend aborts any GPU job that runs longer than 30 s, and encoding
+   *   a full page in one pass can exceed that on slower GPUs.
+   */
+  async load(variant, { preferGpu = true, overrides = {}, visionOnCpu = false } = {}) {
     const model = await this.#findCached(variant);
     if (!model) throw new Error('Model is not downloaded yet.');
 
@@ -71,12 +84,13 @@ export class OcrEngine {
         ...overrides,
         n_parallel: 1,
         n_gpu_layers: gpu ? 99999 : 0,
+        mmproj_offload: gpu && !visionOnCpu,
         jinja: true,
         reasoning: false,
         warmup: false,
       });
       this.#variant = variant;
-      return { backend: gpu ? 'webgpu' : 'cpu', threads: this.#wllama.getNumThreads() };
+      return { backend: gpu ? 'webgpu' : 'cpu', visionOnCpu: !gpu || visionOnCpu, threads: this.#wllama.getNumThreads() };
     };
 
     if (preferGpu && 'gpu' in navigator) {
@@ -127,7 +141,39 @@ export class OcrEngine {
     let text = '';
     let finishReason = null;
     let tokens = 0;
-    await this.#wllama.createChatCompletion({
+    this.#recentLog = [];
+    try {
+      await this.#complete(imageData, signal, (delta) => {
+        text += delta;
+        tokens++;
+        onToken?.(text);
+      }, (reason) => (finishReason = reason));
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      throw await this.#asCrash(err);
+    }
+    return { text, finishReason, tokens, ms: performance.now() - started };
+  }
+
+  /**
+   * A native abort (GPU timeout, OOM, assert) kills the whole wllama module: unload it and
+   * report a typed error so the controller can reload and retry.
+   */
+  async #asCrash(err) {
+    const msg = String(err?.message ?? err);
+    const log = this.#recentLog.join('\n');
+    if (!/crash|abort|unreachable/i.test(msg + log)) return err;
+    await this.unload();
+    const gpuTimeout = /Queue wait timed out/i.test(log);
+    const e = new Error(gpuTimeout ? 'The GPU took too long encoding the image (WebGPU 30 s limit).' : `The OCR engine crashed: ${msg}`);
+    e.code = 'engine_crashed';
+    e.gpuTimeout = gpuTimeout;
+    e.cause = err;
+    return e;
+  }
+
+  #complete(imageData, signal, onDelta, onFinish) {
+    return this.#wllama.createChatCompletion({
       messages: [
         {
           role: 'user',
@@ -146,15 +192,9 @@ export class OcrEngine {
       abortSignal: signal,
       onData: (chunk) => {
         const choice = chunk.choices?.[0];
-        const delta = choice?.delta?.content;
-        if (delta) {
-          text += delta;
-          tokens++;
-          onToken?.(text);
-        }
-        if (choice?.finish_reason) finishReason = choice.finish_reason;
+        if (choice?.delta?.content) onDelta(choice.delta.content);
+        if (choice?.finish_reason) onFinish(choice.finish_reason);
       },
     });
-    return { text, finishReason, tokens, ms: performance.now() - started };
   }
 }

@@ -2,7 +2,9 @@ import { processFile, detectKind } from '../services/DocumentProcessor.js';
 import { cleanModelOutput, htmlToMarkdown, htmlToText, sanitizeHtml } from '../services/outputFormat.js';
 import { toast, copyText, downloadText } from '../views/dom.js';
 
-const isAbort = (err) => err?.name === 'AbortError' || err?.name === 'WllamaAbortError' || /abort/i.test(err?.message ?? '');
+// Only a user cancel counts: native crashes also mention "ABORT" and must not be treated as one.
+const isAbort = (err) => err?.name === 'AbortError' || err?.name === 'WllamaAbortError';
+const MAX_CRASH_RETRIES = 1;
 
 /** Owns documents: import → page queue → sequential OCR → export. */
 export class DocumentController {
@@ -10,8 +12,9 @@ export class DocumentController {
   #importing = 0;
   #abort = null;
 
-  constructor({ docs, engineModel, engine, uploadView, pagesView }) {
-    Object.assign(this, { docs, engineModel, engine, uploadView, pagesView });
+  /** @param {{ recoverEngine: (crash: Error) => Promise<boolean> }} deps also: docs, engineModel, engine, views */
+  constructor({ docs, engineModel, engine, uploadView, pagesView, recoverEngine }) {
+    Object.assign(this, { docs, engineModel, engine, uploadView, pagesView, recoverEngine });
 
     docs.on('pages', (pages) => {
       pagesView.renderList(pages);
@@ -92,7 +95,7 @@ export class DocumentController {
 
     try {
       let page;
-      while (!signal.aborted && (page = this.docs.pending()[0])) {
+      while (!signal.aborted && this.engineModel.isReady && (page = this.docs.pending()[0])) {
         await this.#recognize(page, signal);
       }
     } finally {
@@ -136,8 +139,26 @@ export class DocumentController {
       });
     } catch (err) {
       if (isAbort(err) || signal.aborted) this.docs.updatePage(id, { status: 'pending', html: '' });
+      else if (err?.code === 'engine_crashed') await this.#handleCrash(page, err);
       else this.docs.updatePage(id, { status: 'error', error: err?.message ?? String(err) });
     }
+  }
+
+  /** Reload the engine and requeue the page once; give up on pages that keep crashing it. */
+  async #handleCrash(page, err) {
+    const crashes = (page.crashes ?? 0) + 1;
+    if (crashes > MAX_CRASH_RETRIES) {
+      this.docs.updatePage(page.id, {
+        status: 'error',
+        crashes,
+        error: `${err.message} The engine crashed again after reloading. Try the CPU-compatible model variant.`,
+      });
+    } else {
+      this.docs.updatePage(page.id, { status: 'pending', html: '', crashes });
+    }
+    this.uploadView.setStatus('Reloading the OCR engine…');
+    const ok = await this.recoverEngine(err);
+    if (!ok) this.uploadView.setStatus('The OCR engine could not be reloaded — see the Model panel.');
   }
 
   #render(page, format) {

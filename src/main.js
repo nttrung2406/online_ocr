@@ -23,7 +23,14 @@ const docs = new DocumentModel();
 
 new ThemeController({ model: new ThemeModel(), view: new ThemeView() });
 const engineCtl = new EngineController({ model: engineModel, view: engineView, engine });
-new DocumentController({ docs, engineModel, engine, uploadView: new UploadView(), pagesView: new PagesView() });
+new DocumentController({
+  docs,
+  engineModel,
+  engine,
+  uploadView: new UploadView(),
+  pagesView: new PagesView(),
+  recoverEngine: (crash) => engineCtl.recover(crash),
+});
 
 engineCtl.init();
 
